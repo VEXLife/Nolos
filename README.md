@@ -1,0 +1,1 @@
+# nolosgomoku.github.io
