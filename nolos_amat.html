@@ -196,7 +196,7 @@
         }
         //打分函数分隔符
         function eval(point, blackpercent, whitepercent) {
-            var score = blackpercent * chkpt(point, black, [0, 1]) + chkpt(point, black, [1, 0]) + chkpt(point, black, [1, 1]) + chkpt(point, black, [-1, 1]) + whitepercent * (chkpt(point, white, [0, 1]) + chkpt(point, white, [1, 0]) + chkpt(point, white, [1, 1]) + chkpt(point, white, [-1, 1]));
+            var score = blackpercent * (chkpt(point, black, [0, 1]) + chkpt(point, black, [1, 0]) + chkpt(point, black, [1, 1]) + chkpt(point, black, [-1, 1])) + whitepercent * (chkpt(point, white, [0, 1]) + chkpt(point, white, [1, 0]) + chkpt(point, white, [1, 1]) + chkpt(point, white, [-1, 1]));
             return score;
         }
  
