@@ -12,7 +12,6 @@
 
 
 #### 关于代码的说明
---
 ```
 function search(player,depth)
 ```
