@@ -1,7 +1,7 @@
 <html>
  
 <head>
-    <!-- <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <-- <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/eruda"></script>
  
     <script>
         eruda.init();
@@ -179,7 +179,8 @@
                 var bests = [
                     [0, -999],
                     [1, -999],
-                    [2, -999]
+                    [2, -999],
+                    [3, -999]
                 ];
                 var scores = [];
                 var v = 0;
@@ -195,35 +196,40 @@
                             } else {
                                 v = eval(i, 1, 0.68);
                             }
-                            if (v > bests[0][1]) {
-                                bests[0] = [i, v];
-                            } else if (v > bests[1][1]) {
-                                bests[1] = [i, v];
-                            } else if (v > bests[2][1]) {
-                                bests[2] = [i, v];
+                            for (var j = 0; j < bests.length; j++) {
+                                if (v > bests[j][1]) {
+                                    bests[j] = [i, v];
+                                    break;
+                                }
                             }
                         }
                         scores[i] = v;
                     }
-                    if (step >= 3) {
-                        for (var k = 0; k < 3; k++) {
+                    if (step >= 3 & bests[0][1] < 274) {
+                        if (bests[0][1] >= 61) bests.splice(bests.length - 1, 1);
+                        for (var k = 0; k < bests.length; k++) {
  
                             qp[bests[k][0]] = black;
                             if (iswin(black)) {
                                 bests[k][1] = 9999;
                                 break;
                             }
-                            bests[k][1] -= search(white, 6);
+                            bests[k][1] -= search(white, Math.min(step, 8));
                             qp[bests[k][0]] = empty;
+                            if (bests[k][1] >= 9000) {
+                                bests[0] = bests[k];
+                                break;
+                            }
+                            console.log("下在" + bests[k][0] + "处的评分为" + bests[k][1] + "。");
                         }
                         bests.sort(function(a, b) {
                             return b[1] - a[1];
                         });
                     }
                 }
-                //console.log(bests);
                 step++;
                 setv(bests[0][0], black);
+                console.log("电脑选择落在" + bests[0][0] + "。");
             } catch (err) {
                 alert(err);
             }
@@ -253,7 +259,7 @@
                     //count+=2;
                 } else {
                     count -= 2.6;
-                    if (i >= 2 && vals[i - 1] == empty) count += 0.5;
+                    if (i >= 2 && vals[i - 1] == empty) count += 2.6;
                     break;
                 }
             }
@@ -270,7 +276,7 @@
                     //count+=2;
                 } else {
                     count -= 2.6;
-                    if (j >= 2 && vals[j - 1] == empty) count += 0.5;
+                    if (j >= 2 && vals[j - 1] == empty) count += 2.6;
                     break;
                 }
             }
@@ -286,7 +292,8 @@
             var bests = [
                 [0, -999],
                 [1, -999],
-                [2, -999]
+                [2, -999],
+                [3, -999]
             ];
             var v;
             var me = 1;
@@ -299,31 +306,35 @@
                 v = -1;
                 if (getv(i) == empty) {
                     v = eval(i, me, enemy);
-                    if (v > bests[0][1]) {
-                        bests[0] = [i, v];
-                    } else if (v > bests[1][1]) {
-                        bests[1] = [i, v];
-                    } else if (v > bests[2][1]) {
-                        bests[2] = [i, v];
+                    for (var j = 0; j < bests.length; j++) {
+                        if (v > bests[j][1]) {
+                            bests[j] = [i, v];
+                            break;
+                        }
                     }
                 }
             }
             if (depth == 0) {
                 return bests[0][1];
             } else {
-                for (var i = 0; i < 3; i++) {
- 
+                if (bests[0][1] >= 274) bests.splice(bests.length - 1, 3);
+                if (bests[0][1] >= 61) bests.splice(bests.length - 1, 1);
+                for (var i = 0; i < bests.length; i++) {
                     qp[bests[i][0]] = player;
                     if (iswin(player)) {
                         qp[bests[i][0]] = empty;
                         return 9999;
                     }
                     if (player == black) {
-                        bests[i][1] -= search(white, depth - 1);
+                        v = search(white, depth - 1);
                     } else {
-                        bests[i][1] -= search(black, depth - 1);
+                        v = search(black, depth - 1);
                     }
+                    bests[i][1] -= v;
                     qp[bests[i][0]] = empty;
+                    if (bests[i][1] >= 9000) {
+                        return bests[i][1];
+                    }
                 }
                 bests.sort(function(a, b) {
                     return b[1] - a[1];
