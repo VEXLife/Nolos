@@ -214,7 +214,7 @@
                                 bests[k][1] = 9999;
                                 break;
                             }
-                            bests[k][1] -= search(white, Math.min(step, 8));
+                            bests[k][1] -= search(white, Math.min(step + 1, 8));
                             qp[bests[k][0]] = empty;
                             if (bests[k][1] >= 9000) {
                                 bests[0] = bests[k];
