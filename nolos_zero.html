@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="keywords" content="Nolos五子棋[零]" />
+    <meta name="description" content="一个简易的在线五子棋软件。来看看你能不能打败它！" />
+    <title>Nolos五子棋[零]</title>
+    <style>
+        .help {
+            background-color: #4caf50;
+            border: 2px solid #4caf50;
+            border-radius: 7px;
+            color: white;
+            padding: 5px 10px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .help:hover {
+            transition-duration: 500ms;
+            background-color: #ffffff;
+            color: #4caf50;
+        }
+
+        .help:active {
+            transition-duration: 0ms;
+            background-color: darkgreen;
+            color: white;
+        }
+
+        .help:disabled {
+            background-color: #4caf50;
+            color: white;
+            opacity: .6;
+            cursor: not-allowed;
+        }
+
+        .help_used {
+            background-color: #03c3d1;
+            border: 2px solid #03c3d1;
+            border-radius: 7px;
+            color: white;
+            padding: 5px 10px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .help_used:active {
+            transition-duration: 0ms;
+            background-color: #0081cc;
+            color: white;
+        }
+
+        .help_used:hover {
+            transition-duration: 500ms;
+            background-color: #ffffff;
+            color: #03c3d1;
+        }
+
+        .help_used:disabled {
+            background-color: #03c3d1;
+            color: white;
+            opacity: .6;
+            cursor: not-allowed;
+        }
+
+        .center {
+            text-align: center;
+        }
+    </style>
+
+    <!-- import ONNXRuntime Web from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+    <script src="src/minimax.js"></script>
+</head>
+
+<body>
+    <div class="center">
+        <h1>Nolos五子棋</h1>
+        <span id='timer'>
+            等待您下棋。
+        </span>
+        <br>
+        <canvas id="cboard" width="540" height="540"></canvas>
+        <br>
+        <button onclick='forward();' class="help" id="help">
+            <span>提示一步</span>
+            <br>
+            <small>（这会交换黑白双方！）</small>
+        </button>
+    </div>
+    <script>
+        var black = 2;
+        var white = 1;
+        var empty = 0;
+        var human = white;
+        var nolos = black;
+        var step = 1, over = false, qp = [], wins = [], bwin = [], wwin = [], iswin = {}, wincount = 0, board, context, laststep, d1, d2;
+
+        // Prepare input tensor
+        var board_input = new Float32Array(15 * 15); // Self is 1, otherwise -1, empty 0
+
+        for (var i = 0; i < 15; i++) {
+            qp[i] = [];
+            wins[i] = [];
+            for (var j = 0; j < 15; j++) {
+                qp[i][j] = empty;
+                wins[i][j] = [];
+            }
+        }
+        for (var i = 0; i < 15; i++) {
+            for (var j = 0; j < 11; j++) {
+                for (var k = 0; k < 5; k++) {
+                    wins[i][j + k][wincount] = true;
+                }
+                wincount++;
+            }
+        }
+        for (var i = 0; i < 15; i++) {
+            for (var j = 0; j < 11; j++) {
+                for (var k = 0; k < 5; k++) {
+                    wins[j + k][i][wincount] = true;
+                }
+                wincount++;
+            }
+        }
+        for (var i = 0; i < 11; i++) {
+            for (var j = 0; j < 11; j++) {
+                for (var k = 0; k < 5; k++) {
+                    wins[i + k][j + k][wincount] = true;
+                }
+                wincount++;
+            }
+        }
+        for (var i = 0; i < 11; i++) {
+            for (var j = 14; j > 3; j--) {
+                for (var k = 0; k < 5; k++) {
+                    wins[i + k][j - k][wincount] = true;
+                }
+                wincount++;
+            }
+        }
+        for (var i = 0; i < wincount; i++) {
+            bwin[i] = 0;
+            wwin[i] = 0;
+        }
+        paintqp();
+
+        var reverse = function (player) {
+            return player == black ? white : black;
+        }
+
+        function paintqp() {
+            board = document.getElementById("cboard");
+            context = board.getContext("2d");
+            var img = new Image();
+            img.src = "./img/background.bmp";
+            img.onload = () => {
+                context.drawImage(img, 0, 0, 540, 540);
+                context.fillStyle = "black";
+                for (var i = 0; i < 15; i++) {
+                    context.moveTo(18 + i * 36, 18);
+                    context.lineTo(18 + i * 36, 522);
+                    context.stroke();
+                    context.moveTo(18, 18 + i * 36);
+                    context.lineTo(522, 18 + i * 36);
+                    context.stroke();
+                }
+                context.beginPath();
+                context.arc(18 + 3 * 36, 18 + 3 * 36, 4, 0, 2 * Math.PI);
+                context.fill();
+                context.beginPath();
+                context.arc(18 + 11 * 36, 18 + 11 * 36, 4, 0, 2 * Math.PI);
+                context.fill();
+                context.beginPath();
+                context.arc(18 + 3 * 36, 18 + 11 * 36, 4, 0, 2 * Math.PI);
+                context.fill();
+                context.beginPath();
+                context.arc(18 + 11 * 36, 18 + 3 * 36, 4, 0, 2 * Math.PI);
+                context.fill();
+                context.beginPath();
+                context.arc(18 + 7 * 36, 18 + 7 * 36, 4, 0, 2 * Math.PI);
+                context.fill();
+                board.onclick = function (e) {
+                    if (over) return;
+                    var i = Math.floor(e.offsetX / 36);
+                    var j = Math.floor(e.offsetY / 36);
+                    act(i, j);
+                };
+                setv(7, 7, black);
+            }
+        }
+
+        function getv(i, j) {
+            return qp[i][j];
+        }
+
+        function setv(i, j, chess, notdraw) {
+            qp[i][j] = chess;
+            board_input[i * 15 + j] = chess == human ? -1 : 1;
+            for (var k = 0; k < wincount; k++) {
+                if (wins[i][j][k]) {
+                    if (chess == black) {
+                        bwin[k]++;
+                        wwin[k] = 6;
+                        iswin[black] = (bwin[k] == 5 | iswin[black]);
+                    } else {
+                        wwin[k]++;
+                        bwin[k] = 6;
+                        iswin[white] = (wwin[k] == 5 | iswin[white]);
+                    }
+                }
+            }
+            if (notdraw) return;
+            context.beginPath();
+            context.arc(18 + i * 36, 18 + j * 36, 16, 0, 2 * Math.PI);
+            context.fillStyle = chess == black ? "black" : "white";
+            context.fill();
+            context.beginPath();
+            context.arc(18 + i * 36, 18 + j * 36, 7, 0, 2 * Math.PI);
+            context.fillStyle = "red";
+            context.fill();
+            context.font = "16px bold calibri";
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            if (laststep) {
+                if (chess == black) {
+                    context.beginPath();
+                    context.arc(18 + laststep[0] * 36, 18 + laststep[1] * 36, 8, 0, 2 * Math.PI);
+                    context.fillStyle = "white";
+                    context.fill();
+                    context.fillStyle = "black";
+                    context.fillText(step, 18 + laststep[0] * 36, 18 + laststep[1] * 36);
+                } else {
+                    context.beginPath();
+                    context.arc(18 + laststep[0] * 36, 18 + laststep[1] * 36, 8, 0, 2 * Math.PI);
+                    context.fillStyle = "black";
+                    context.fill();
+                    context.fillStyle = "white";
+                    context.fillText(step, 18 + laststep[0] * 36, 18 + laststep[1] * 36);
+                }
+            }
+            laststep = [i, j];
+        }
+
+        function act(x, y) {
+            if (getv(x, y) == empty) {
+                d1 = (new Date()).getTime();
+                setv(x, y, human);
+                if (iswin[human] == true) {
+                    document.getElementById("timer").innerHTML = human == white ? "白棋胜！请重新启动程序。" : "黑棋胜！请重新启动程序。";
+                    over = true;
+                    document.getElementById("help").disabled = over;
+                    return;
+                }
+                step++;
+                if (step >= 225) {
+                    document.getElementById("timer").innerHTML = "平局！请重新启动程序。";
+                    over = true;
+                    document.getElementById("help").disabled = over;
+                    return;
+                }
+                over = true;
+                document.getElementById("help").disabled = over;
+                document.getElementById("timer").innerHTML = "电脑正在思考……";
+                ai().then(function () {
+                    step++;
+                    if (iswin[nolos] == true) {
+                        document.getElementById("timer").innerHTML = nolos == white ? "白棋胜！请重新启动程序。" : "黑棋胜！请重新启动程序。";
+                        return;
+                    }
+                    if (step >= 225) {
+                        document.getElementById("timer").innerHTML = "平局！请重新启动程序。";
+                        return;
+                    }
+                    over = false;
+                    document.getElementById("help").disabled = over;
+                    d2 = (new Date()).getTime();
+                    document.getElementById("timer").innerHTML = "本次电脑思考用时" + (d2 - d1 - 100).toString() + "毫秒。";
+                });
+            }
+        }
+
+        function forward() {
+            if (step != 1) {
+                alert("非开发人员只能在第一步使用！");
+                return;
+            }
+            document.getElementById("help").className = "help_used";
+            human = reverse(human);
+            nolos = reverse(nolos);
+            board_input = board_input.map(x => -x);
+            over = true;
+            document.getElementById("help").disabled = over;
+            document.getElementById("timer").innerHTML = "电脑正在思考……";
+            d1 = (new Date()).getTime();
+            ai().then(function () {
+                step++;
+                if (iswin[nolos] == true) {
+                    document.getElementById("timer").innerHTML = nolos == white ? "白棋胜！请重新启动程序。" : "黑棋胜！请重新启动程序。";
+                    return;
+                }
+                if (step >= 225) {
+                    document.getElementById("timer").innerHTML = "平局！请重新启动程序。";
+                    return;
+                }
+                over = false;
+                document.getElementById("help").disabled = over;
+                d2 = (new Date()).getTime();
+                document.getElementById("timer").innerHTML = "本次电脑思考用时" + (d2 - d1 - 100).toString() + "毫秒。";
+            });
+        }
+
+        async function policy_value_fn(board_arr, session) {
+            // Run inference
+            const input_tensor = new ort.Tensor("float32", board_arr, [1, 1, 15, 15]);
+            const output = await session.run({ 'inputs': input_tensor });
+            return {
+                "policy": output['softmax_0.tmp_0'].data,
+                "value": output['tanh_0.tmp_0'].data
+            };
+        }
+
+        async function ai() {
+            // Use ONNX Runtime to load AlphaZero model
+            const session = await ort.InferenceSession.create('./model.onnx');
+
+            const best_move = await findBestMove(board_input, 5, session, 5, recurrent_fn, policy_value_fn);
+            setv(Math.floor(best_move / 15), best_move % 15, nolos);
+        }
+
+        function recurrent_fn(board_arr, action) {
+            // board_arr: 15x15 array, action: 0-224 like integer, depends on previous action_space
+            // Game simulation logic
+            reward = 0;
+            done = false;
+
+            if (action != -1) {
+                next_board_arr = board_arr.map(x => -x);
+                next_board_arr[action] = -1;
+                // Reward calculation
+                // horizontal, if 5 in a row, reward = 1
+                delta = [-1, 1, -15, 15, -14, 14, -16, 16];
+                for (let i = 0; i < 8; i++) {
+                    let x = action;
+                    let count = 0;
+                    while (x >= 0 && x < 225 && next_board_arr[x] == -1 && count <= 5 && x % 15 != 14 && x % 15 != 0) {
+                        count++;
+                        x += delta[i];
+                    }
+                    x = action;
+                    while (x >= 0 && x < 225 && next_board_arr[x] == -1 && count <= 5 && x % 15 != 14 && x % 15 != 0) {
+                        count++;
+                        x -= delta[i];
+                    }
+                    count--;
+                    if (count >= 5) {
+                        done = true;
+                        reward = 1;
+                        break;
+                    }
+                }
+
+                action_space = done ? [] : next_board_arr.map((x, i) => x == 0 ? i : -1).filter(x => x != -1);
+
+                // Check if draw
+                done = done || action_space.length == 0;
+            } else {
+                // Initial state of root node
+                next_board_arr = board_arr;
+                action_space = done ? [] : board_arr.map((x, i) => x == 0 ? i : -1).filter(x => x != -1);
+            }
+            return {
+                "next_board": next_board_arr,
+                "reward": reward,
+                "done": done,
+                "action_space": action_space,
+            }
+        }
+
+    </script>
+</body>
+
+</html>
