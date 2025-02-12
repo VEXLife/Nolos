@@ -148,7 +148,15 @@
             bwin[i] = 0;
             wwin[i] = 0;
         }
-        paintqp();
+
+        // Use ONNX Runtime to load AlphaZero model
+        document.getElementById("timer").innerHTML = "等待下载模型……第一次使用需下载模型，时间较长。";
+        var session;
+        ort.InferenceSession.create('./model.onnx').then((sess) => {
+            document.getElementById("timer").innerHTML = "等待您下棋。";
+            paintqp();
+            session = sess;
+        });
 
         var reverse = function (player) {
             return player == black ? white : black;
@@ -267,21 +275,22 @@
                 over = true;
                 document.getElementById("help").disabled = over;
                 document.getElementById("timer").innerHTML = "电脑正在思考……";
-                ai().then(function () {
-                    step++;
-                    if (iswin[nolos] == true) {
-                        document.getElementById("timer").innerHTML = nolos == white ? "白棋胜！请重新启动程序。" : "黑棋胜！请重新启动程序。";
-                        return;
-                    }
-                    if (step >= 225) {
-                        document.getElementById("timer").innerHTML = "平局！请重新启动程序。";
-                        return;
-                    }
-                    over = false;
-                    document.getElementById("help").disabled = over;
-                    d2 = (new Date()).getTime();
-                    document.getElementById("timer").innerHTML = "本次电脑思考用时" + (d2 - d1 - 100).toString() + "毫秒。";
-                });
+                setTimeout(() =>
+                    ai().then(function () {
+                        step++;
+                        if (iswin[nolos] == true) {
+                            document.getElementById("timer").innerHTML = nolos == white ? "白棋胜！请重新启动程序。" : "黑棋胜！请重新启动程序。";
+                            return;
+                        }
+                        if (step >= 225) {
+                            document.getElementById("timer").innerHTML = "平局！请重新启动程序。";
+                            return;
+                        }
+                        over = false;
+                        document.getElementById("help").disabled = over;
+                        d2 = (new Date()).getTime();
+                        document.getElementById("timer").innerHTML = "本次电脑思考用时" + (d2 - d1 - 100).toString() + "毫秒。";
+                    }), 100);
             }
         }
 
@@ -298,21 +307,22 @@
             document.getElementById("help").disabled = over;
             document.getElementById("timer").innerHTML = "电脑正在思考……";
             d1 = (new Date()).getTime();
-            ai().then(function () {
-                step++;
-                if (iswin[nolos] == true) {
-                    document.getElementById("timer").innerHTML = nolos == white ? "白棋胜！请重新启动程序。" : "黑棋胜！请重新启动程序。";
-                    return;
-                }
-                if (step >= 225) {
-                    document.getElementById("timer").innerHTML = "平局！请重新启动程序。";
-                    return;
-                }
-                over = false;
-                document.getElementById("help").disabled = over;
-                d2 = (new Date()).getTime();
-                document.getElementById("timer").innerHTML = "本次电脑思考用时" + (d2 - d1 - 100).toString() + "毫秒。";
-            });
+            setTimeout(() =>
+                ai().then(function () {
+                    step++;
+                    if (iswin[nolos] == true) {
+                        document.getElementById("timer").innerHTML = nolos == white ? "白棋胜！请重新启动程序。" : "黑棋胜！请重新启动程序。";
+                        return;
+                    }
+                    if (step >= 225) {
+                        document.getElementById("timer").innerHTML = "平局！请重新启动程序。";
+                        return;
+                    }
+                    over = false;
+                    document.getElementById("help").disabled = over;
+                    d2 = (new Date()).getTime();
+                    document.getElementById("timer").innerHTML = "本次电脑思考用时" + (d2 - d1 - 100).toString() + "毫秒。";
+                }), 100);
         }
 
         async function policy_value_fn(board_arr, session) {
@@ -326,9 +336,6 @@
         }
 
         async function ai() {
-            // Use ONNX Runtime to load AlphaZero model
-            const session = await ort.InferenceSession.create('./model.onnx');
-
             const best_move = await findBestMove(board_input, 5, session, 5, recurrent_fn, policy_value_fn);
             setv(Math.floor(best_move / 15), best_move % 15, nolos);
         }
