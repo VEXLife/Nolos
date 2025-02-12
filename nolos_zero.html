@@ -152,11 +152,38 @@
         // Use ONNX Runtime to load AlphaZero model
         document.getElementById("timer").innerHTML = "等待下载模型……第一次使用需下载模型，时间较长。";
         var session;
-        ort.InferenceSession.create('./model.onnx').then((sess) => {
+        if ('caches' in window) {
+            caches.open('model-cache').then(function(cache) {
+            cache.match('./model.onnx').then(function(response) {
+                if (response) {
+                response.arrayBuffer().then(function(buffer) {
+                    ort.InferenceSession.create(buffer).then((sess) => {
+                    document.getElementById("timer").innerHTML = "等待您下棋。";
+                    paintqp();
+                    session = sess;
+                    });
+                });
+                } else {
+                fetch('./model.onnx').then(function(response) {
+                    cache.put('./model.onnx', response.clone());
+                    response.arrayBuffer().then(function(buffer) {
+                    ort.InferenceSession.create(buffer).then((sess) => {
+                        document.getElementById("timer").innerHTML = "等待您下棋。";
+                        paintqp();
+                        session = sess;
+                    });
+                    });
+                });
+                }
+            });
+            });
+        } else {
+            ort.InferenceSession.create('./model.onnx').then((sess) => {
             document.getElementById("timer").innerHTML = "等待您下棋。";
             paintqp();
             session = sess;
-        });
+            });
+        }
 
         var reverse = function (player) {
             return player == black ? white : black;
