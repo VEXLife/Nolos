@@ -12,6 +12,7 @@ async function minimax(board_arr, action_space, depth, minimum, maximum, session
         .sort((a, b) => b.prob - a.prob)
         .slice(0, k) // Assuming k is defined somewhere in your code
 
+    let best_score = -Infinity;
     for (const { index, prob } of topKActions) {
         next_state = recurrent_fn(board_arr, index);
 
@@ -20,13 +21,16 @@ async function minimax(board_arr, action_space, depth, minimum, maximum, session
         }
 
         const score = await minimax(next_state.next_board, next_state.action_space, depth - 1, -maximum, -minimum, session, k, recurrent_fn, policy_value_fn);
-        minimum = Math.max(minimum, -score);
-        if (minimum >= maximum) { // Pruning
-            break;
+        if (score > best_score) {
+            best_score = score;
+            minimum = Math.max(minimum, best_score);
+        }
+        if (score >= maximum) { // Pruning
+            return score;
         }
     }
 
-    return minimum;
+    return best_score;
 }
 
 // Function to find the best move using Minimax
