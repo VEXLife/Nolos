@@ -15,7 +15,7 @@
 训练代码来自[a0-jax](https://github.com/NTT123/a0-jax)
 
 ## 新
-演示版本[点此即玩](https://vexlife.github.io/Nolos/nolos_zero.html)。<br>
+演示版本[点此即玩](https://vexlife.github.io/Nolos/nolos_nnue.html)。<br>
 极高水平版本，基于NNUE技术，依靠GPT-6.1 Sol和Claude Opus 5.5打造，更加专业。
 
 ## 用户
