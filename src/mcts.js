@@ -96,8 +96,10 @@
         return {board, prior, move, visits: 0, sum: 0, value: 0, children: null, solved: null, proofDepth: null, urgency: 0};
     }
     class Search {
-        constructor(evaluate) {
+        // evaluateBatch(boards) -> predictions[] is optional; without it leaves are scored one by one.
+        constructor(evaluate, evaluateBatch = null) {
             this.evaluate = evaluate;
+            this.evaluateBatch = evaluateBatch;
             this.cache = new Map();
             this.root = null;
         }
@@ -138,7 +140,8 @@
         }
         async run(input, options = {}) {
             const settings = {timeMs: 3000, maxEvaluations: 160, maxSimulations: 4000,
-                cpuct: 1.5, tacticalNodes: 1500, tacticalDepth: 8, ...options};
+                cpuct: 1.5, tacticalNodes: 1500, tacticalDepth: 8, batch: 1, ...options};
+            const batchSize = Math.max(1, Math.floor(settings.batch) || 1);
             if (settings.continuous) {
                 settings.timeMs = Infinity;
                 settings.maxEvaluations = Infinity;
@@ -173,33 +176,11 @@
             find(this.root, 2);
             this.root = root || node(board);
             root = this.root;
-            const expand = async n => {
-                expandedSinceCompaction++;
+            // Terminal checks and cache lookups are synchronous. Only a position that
+            // needs the network returns null; finish() then expands it from the prediction.
+            const expandWith = (n, prediction) => {
                 const actions = legal(n.board);
-                if (!actions.length) { n.solved = 0; n.proofDepth = 0; n.children = []; return 0; }
-                const winsNow = winningMoves(n.board, 1, actions);
-                if (winsNow.length) {
-                    n.solved = 1; n.proofDepth = 1;
-                    n.children = winsNow.map(move => {
-                        const child = node(play(n.board, move), 1 / winsNow.length, move);
-                        child.solved = -1; child.proofDepth = 0; child.children = []; return child;
-                    });
-                    return 1;
-                }
                 const blocks = winningMoves(n.board, -1, actions);
-                if (blocks.length > 1) { n.solved = -1; n.proofDepth = 2; n.children = []; return -1; }
-                const positionKey = this.key(n.board);
-                let prediction = this.cache.get(positionKey);
-                if (prediction) stats.cacheHits++;
-                else {
-                    prediction = await this.evaluate(n.board);
-                    stats.evaluations++;
-                    prediction = {policy: Float32Array.from(prediction.policy), value: Number(prediction.value[0] ?? prediction.value)};
-                    if (prediction.policy.length !== CELLS || !Number.isFinite(prediction.value))
-                        throw new Error('Invalid policy/value model output');
-                    if (this.cache.size >= 4096) this.cache.delete(this.cache.keys().next().value);
-                    this.cache.set(positionKey, prediction);
-                }
                 n.value = Math.max(-1, Math.min(1, prediction.value));
                 // Keep every legal move; the 2% tactical prior retains a nonzero exploration floor.
                 const candidates = blocks.length ? blocks : actions;
@@ -215,38 +196,102 @@
                 });
                 return n.value;
             };
+            const prepare = n => {
+                expandedSinceCompaction++;
+                const actions = legal(n.board);
+                if (!actions.length) { n.solved = 0; n.proofDepth = 0; n.children = []; return 0; }
+                const winsNow = winningMoves(n.board, 1, actions);
+                if (winsNow.length) {
+                    n.solved = 1; n.proofDepth = 1;
+                    n.children = winsNow.map(move => {
+                        const child = node(play(n.board, move), 1 / winsNow.length, move);
+                        child.solved = -1; child.proofDepth = 0; child.children = []; return child;
+                    });
+                    return 1;
+                }
+                const blocks = winningMoves(n.board, -1, actions);
+                if (blocks.length > 1) { n.solved = -1; n.proofDepth = 2; n.children = []; return -1; }
+                n.positionKey = this.key(n.board);
+                const cached = this.cache.get(n.positionKey);
+                if (cached) { stats.cacheHits++; return expandWith(n, cached); }
+                return null;
+            };
+            const score = async boards => {
+                const raw = this.evaluateBatch && boards.length > 1
+                    ? await this.evaluateBatch(boards)
+                    : await Promise.all(boards.map(board => this.evaluate(board)));
+                return raw.map(prediction => {
+                    prediction = {policy: Float32Array.from(prediction.policy), value: Number(prediction.value[0] ?? prediction.value)};
+                    if (prediction.policy.length !== CELLS || !Number.isFinite(prediction.value))
+                        throw new Error('Invalid policy/value model output');
+                    stats.evaluations++;
+                    return prediction;
+                });
+            };
+            // Virtual loss: a leaf in flight counts as a lost visit for the player choosing it,
+            // so one batch spreads over different lines. Undone before the real backup.
+            const virtual = (path, sign) => {
+                for (let i = 1; i < path.length; i++) { path[i].visits += sign; path[i].sum += sign; }
+            };
             while (stats.simulations < settings.maxSimulations && stats.evaluations < settings.maxEvaluations && now() < deadline && !settings.shouldStop?.()) {
-                const path = [root];
-                let n = root;
-                while (n.children && n.children.length && n.solved === null) {
-                    let best = null, score = -Infinity;
-                    const avoidLoss = n.children.some(child => child.solved !== 1);
-                    for (const child of n.children) {
-                        if (avoidLoss && child.solved === 1) continue;
-                        const q = child.solved !== null ? -child.solved : child.visits ? -child.sum / child.visits : Math.max(-1, n.value - 0.2);
-                        const u = settings.cpuct * child.prior * Math.sqrt(n.visits + 1) / (1 + child.visits);
-                        const s = q + u;
-                        if (s > score) { score = s; best = child; }
-                    }
-                    if (!best.board) best.board = play(n.board, best.move);
-                    n = best; path.push(n);
-                }
-                let value = n.solved !== null ? n.solved : await expand(n);
-                for (let i = path.length - 1; i >= 0; i--) {
-                    const current = path[i];
-                    current.visits++; current.sum += value;
-                    if (current.children && current.children.length) {
-                        if (current.children.some(c => c.solved === -1)) {
-                            current.solved = 1;
-                            current.proofDepth = 1 + Math.min(...current.children.filter(c => c.solved === -1).map(c => c.proofDepth));
-                        } else if (current.children.every(c => c.solved !== null)) {
-                            current.solved = Math.max(...current.children.map(c => -c.solved));
-                            current.proofDepth = 1 + Math.max(...current.children.map(c => c.proofDepth));
+                const leaves = [];
+                let pending = 0;
+                while (leaves.length < batchSize && stats.simulations + leaves.length < settings.maxSimulations &&
+                       stats.evaluations + pending < settings.maxEvaluations) {
+                    const path = [root];
+                    let n = root;
+                    while (n.children && n.children.length && n.solved === null) {
+                        let best = null, top = -Infinity;
+                        const avoidLoss = n.children.some(child => child.solved !== 1);
+                        for (const child of n.children) {
+                            if (avoidLoss && child.solved === 1) continue;
+                            const q = child.solved !== null ? -child.solved : child.visits ? -child.sum / child.visits : Math.max(-1, n.value - 0.2);
+                            const u = settings.cpuct * child.prior * Math.sqrt(n.visits + 1) / (1 + child.visits);
+                            const s = q + u;
+                            if (s > top) { top = s; best = child; }
                         }
+                        if (!best.board) best.board = play(n.board, best.move);
+                        n = best; path.push(n);
                     }
-                    value = current.solved !== null ? -current.solved : -value;
+                    if (n.pending) break; // already queued in this batch
+                    let value = n.solved, need = false;
+                    if (value === null) { value = prepare(n); need = value === null; }
+                    if (need) { n.pending = true; pending++; }
+                    virtual(path, 1);
+                    leaves.push({path, n, value, need});
+                    if (root.solved !== null) break;
                 }
-                stats.simulations++;
+                if (!leaves.length) break;
+                const queued = leaves.filter(leaf => leaf.need);
+                if (queued.length) {
+                    const predictions = await score(queued.map(leaf => leaf.n.board));
+                    queued.forEach((leaf, i) => {
+                        this.cache.set(leaf.n.positionKey, predictions[i]);
+                        leaf.n.pending = false;
+                        leaf.value = expandWith(leaf.n, predictions[i]);
+                    });
+                    while (this.cache.size > 4096) this.cache.delete(this.cache.keys().next().value);
+                }
+                for (const leaf of leaves) virtual(leaf.path, -1);
+                const before = stats.simulations;
+                for (const {path, value: leafValue} of leaves) {
+                    let value = leafValue;
+                    for (let i = path.length - 1; i >= 0; i--) {
+                        const current = path[i];
+                        current.visits++; current.sum += value;
+                        if (current.children && current.children.length) {
+                            if (current.children.some(c => c.solved === -1)) {
+                                current.solved = 1;
+                                current.proofDepth = 1 + Math.min(...current.children.filter(c => c.solved === -1).map(c => c.proofDepth));
+                            } else if (current.children.every(c => c.solved !== null)) {
+                                current.solved = Math.max(...current.children.map(c => -c.solved));
+                                current.proofDepth = 1 + Math.max(...current.children.map(c => c.proofDepth));
+                            }
+                        }
+                        value = current.solved !== null ? -current.solved : -value;
+                    }
+                    stats.simulations++;
+                }
                 if (root.solved !== null) break;
                 // Bound long-running analysis memory; preserve root statistics and proofs.
                 if (settings.continuous && expandedSinceCompaction >= (settings.treeExpansionLimit ?? 2048)) {
@@ -261,7 +306,7 @@
                     }
                     expandedSinceCompaction = 0;
                 }
-                if (stats.simulations % 8 === 0) {
+                if (Math.floor(stats.simulations / 8) !== Math.floor(before / 8)) {
                     if (settings.onProgress) settings.onProgress({...stats, elapsedMs: now() - start, ...this.snapshot(root)});
                     await new Promise(resolve => setTimeout(resolve, 0));
                 }

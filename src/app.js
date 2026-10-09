@@ -6,7 +6,7 @@
     let mapping = viewMaps(view);
     const coord = move => rawCoord(mapping.forward[move]);
     const canvas = $('board'), ctx = canvas.getContext('2d');
-    const worker = new Worker('src/search-worker.js?v=12');
+    const worker = new Worker('src/search-worker.js?v=13');
     const state = {moves: [], cursor: 0, ready: false, active: null, serial: 0,
         analysis: new Map(), hover: null, pinned: null, focus: null};
     const reasons = {win: '立即成五', block: '唯一必防点', 'forcing-four': '连续冲四已证明',
@@ -61,7 +61,17 @@
         render();
     }
     worker.onmessage = ({data}) => {
-        if (data.type === 'ready') { state.ready = true; render(); maybeAI(); return; }
+        if (data.type === 'ready') {
+            state.ready = true; $('backend').disabled = $('batch-size').disabled = false;
+            const wanted = $('backend').value;
+            state.backend = data.label;
+            state.fallback = wanted !== 'auto' && wanted !== data.backend;
+            $('backend-tag').textContent = data.label + (state.fallback ? ' · 已回退' : '');
+            $('backend-tag').classList.toggle('warn', state.fallback);
+            if (state.fallback) notice(`所选后端不可用，已回退到 ${data.label}：` + data.failures.join('；'));
+            $('backend-tag').title = `批大小 ${data.batch} · 约 ${(data.speed * 1000).toFixed(0)} 局面/秒` + (data.failures.length ? '\n不可用：' + data.failures.join('；') : '');
+            render(); maybeAI(); return;
+        }
         if (data.type === 'error') {
             if (data.id === 0 || data.id === state.active?.id) {
                 state.active = null; notice('模型或搜索出错：' + data.message); render();
@@ -82,6 +92,23 @@
         }
     };
     worker.onerror = event => { state.active = null; notice('分析线程出错：' + event.message); render(); };
+    try { const saved = localStorage.getItem('nolos-zero-backend'); if (saved && [...$('backend').options].some(o => o.value === saved)) $('backend').value = saved; } catch (_) {}
+    const batchValue = () => Math.max(1, Math.min(64, Math.floor(Number($('batch-size').value)) || 16));
+    try { const saved = Number(localStorage.getItem('nolos-zero-batch')); if (saved >= 1 && saved <= 64) $('batch-size').value = saved; } catch (_) {}
+    // Both settings rebuild the session: WebNN fixes the batch at creation, and speed is re-measured.
+    const reconfigure = () => {
+        $('batch-size').value = batchValue();
+        try {
+            localStorage.setItem('nolos-zero-backend', $('backend').value);
+            localStorage.setItem('nolos-zero-batch', $('batch-size').value);
+        } catch (_) {}
+        if (!state.ready) return;
+        cancel(); state.ready = false; $('backend').disabled = $('batch-size').disabled = true;
+        $('engine-status').textContent = '切换推理后端';
+        worker.postMessage({type: 'backend', id: 0, backend: $('backend').value, batch: batchValue()});
+    };
+    $('backend').onchange = reconfigure;
+    $('batch-size').onchange = reconfigure;
     async function loadModel() {
         let cache;
         try { if ('caches' in window) cache = await caches.open('model-cache'); } catch (_) {}
@@ -103,7 +130,7 @@
             buffer = await new Blob(chunks).arrayBuffer();
         } else buffer = await response.arrayBuffer();
         $('engine-status').textContent = '正在初始化网络';
-        worker.postMessage({type: 'init', id: 0, buffer}, [buffer]);
+        worker.postMessage({type: 'init', id: 0, buffer, backend: $('backend').value, batch: batchValue()}, [buffer]);
     }
     function previewCandidate() {
         const move = state.pinned ?? state.hover;
@@ -112,7 +139,7 @@
     function render() {
         const p = current(), a = analysis(), busy = Boolean(state.active), review = state.cursor < state.moves.length;
         $('engine-pill').className = 'engine-pill ' + (busy ? 'thinking' : state.ready ? 'ready' : '');
-        if (state.ready) $('engine-status').textContent = busy ? (state.active.stopping ? '正在停止' : '搜索中 · 本地推理') : '模型就绪 · 本地推理';
+        if (state.ready) $('engine-status').textContent = (busy ? (state.active.stopping ? '正在停止' : '搜索中') : '模型就绪') + ' · ' + (state.backend || '本地推理');
         $('move-counter').textContent = String(state.cursor).padStart(2, '0');
         $('turn-text').textContent = p.ended ? p.winner ? (p.winner === 1 ? '黑棋胜' : '白棋胜') : '和棋' : (p.side === 1 ? '黑棋' : '白棋') + '行棋';
         $('black-who').textContent = $('mode').value === 'analysis' ? '自由分析' : $('mode').value === 'black' ? '您' : '电脑';
@@ -146,6 +173,7 @@
         $('inferences').textContent = a ? fmt(a.evaluations || 0) : '—';
         $('cache-hits').textContent = a ? fmt(a.cacheHits || 0) : '—';
         $('elapsed').textContent = a?.elapsedMs === undefined ? '—' : (a.elapsedMs / 1000).toFixed(2) + 's';
+        $('inference-speed').textContent = a?.elapsedMs > 0 ? fmt(Math.round((a.evaluations || 0) / a.elapsedMs * 1000)) + '/s' : '—';
         $('pv-label').textContent = preview ? '主要变化 · ' + coord(preview.move) + (state.pinned !== null ? ' · 已锁定' : '') : '主要变化 · 悬停候选查看';
         $('pv').replaceChildren(...(preview?.pv?.length ? preview.pv.map((move, i) => {
             const span = document.createElement('span'); span.textContent = (i + 1) + ' ' + coord(move); return span;

@@ -11,3 +11,5 @@ body[data-ui="light"] .card{border-radius:20px;border:2px solid var(--rule);box-
 .topbar button.ghost{width:32px;height:32px;min-width:32px;flex:0 0 32px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}
 @media(max-width:360px){.engine-pill span{display:none}.engine-pill{gap:0}}
 .view-tools{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.view-tools button:not(.small){width:34px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center}.view-tools svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.view-tools button[aria-pressed=true]{color:var(--accent);border-color:var(--accent);background:var(--raise)}.view-tools span{margin-left:auto;font-size:11px;color:var(--muted)}
+
+.tag.warn { color: #f0b429; border-color: #f0b429; }
