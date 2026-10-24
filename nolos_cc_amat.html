@@ -648,6 +648,26 @@ p {
   gap: 18px;
 }
 
+/* Analysis controls sit at the bottom of the board card, below the red player
+   row, so thumbs reach them before the rail; the right rail remains the score
+   sheet. */
+.board-analysis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--rule);
+}
+
+.board-analysis .secondary {
+  width: 100%;
+}
+
+#stop:not(:disabled) {
+  border-color: var(--cinnabar);
+  color: var(--cinnabar);
+}
+
 .ghost {
   padding: 6px 0;
   border: 0;
@@ -1004,6 +1024,93 @@ input::file-selector-button {
   transition: width .4s ease, left .4s ease, background .4s ease;
 }
 
+.trend-block {
+  margin-bottom: 20px;
+}
+
+.trend-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: .12em;
+}
+
+.trend-head span:first-child {
+  color: var(--ink-muted);
+}
+
+.trend svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.trend-edge {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+
+.trend-zero {
+  stroke: var(--rule-strong);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.trend-line {
+  fill: none;
+  stroke: var(--cinnabar);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trend-area.positive {
+  fill: color-mix(in srgb, var(--cinnabar) 12%, transparent);
+}
+
+.trend-area.negative {
+  fill: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.trend-dot {
+  fill: var(--cinnabar);
+}
+
+.trend-dot.mate {
+  fill: var(--ink);
+}
+
+.trend-dot.current {
+  fill: var(--paper-raised);
+  stroke: var(--cinnabar);
+  stroke-width: 1.5;
+}
+
+.trend-now {
+  stroke: var(--ink-muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: .55;
+}
+
+.trend-axis,
+.trend-empty {
+  fill: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: .08em;
+}
+
+.trend-axis.red {
+  fill: var(--cinnabar);
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1094,17 +1201,6 @@ input::file-selector-button {
 .reply-key {
   border: 1px dashed var(--ink-muted);
   color: var(--ink);
-}
-
-.search-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.search-actions .secondary {
-  width: 100%;
 }
 
 /* ============================================================
@@ -1751,6 +1847,16 @@ dialog .secondary {
     gap: 14px;
   }
 
+  .board-analysis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 10px 16px;
+  }
+
+  .board-analysis .secondary {
+    height: 44px;
+    font-size: 12.5px;
+  }
+
   .about {
     padding: 28px 16px 0;
   }
@@ -1925,6 +2031,9 @@ const START = 'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - -
 // Engine mate scores are MATE_SCORE - ply (src/eval.rs, src/search.rs).
 const MATE_SCORE = 29000;
 const MATE_BOUND = MATE_SCORE - 128;
+// The trend chart saturates at eight soldiers' worth of centipawns so one
+// winning position cannot flatten the rest of the game into a straight line.
+const TREND_CLAMP = 800;
 const coord = s => String.fromCharCode(97 + s % 9) + Math.floor(s / 9);
 const from = m => (m >> 7) & 127;
 const to = m => m & 127;
@@ -1976,12 +2085,12 @@ function call(action, params = {}, progress) {
 function resetTree(fen) {
   nodes.clear();
   nodeSeq = 0;
-  root = { id: 0, parent: null, children: [], preferred: null, move: 0, label: '', side: null, fen, depth: 0 };
+  root = { id: 0, parent: null, children: [], preferred: null, move: 0, label: '', side: null, fen, depth: 0, eval: null, evalMate: false };
   nodes.set(0, root);
   current = root;
 }
 function addNode(parent, move, label, side, fen) {
-  const node = { id: ++nodeSeq, parent, children: [], preferred: null, move, label, side, fen, depth: parent.depth + 1 };
+  const node = { id: ++nodeSeq, parent, children: [], preferred: null, move, label, side, fen, depth: parent.depth + 1, eval: null, evalMate: false };
   parent.children.push(node);
   nodes.set(node.id, node);
   return node;
@@ -2011,7 +2120,17 @@ function markPath(node) {
   for (let n = node; n?.parent; n = n.parent) n.parent.preferred = n;
 }
 function reviewing() { return !!current && lineEnd(current) !== current; }
+// Free analysis is the only search during which the board stays live: a move
+// aborts the search and immediately starts a fresh analysis of the new position.
+function freeAnalysing() { return searching && searchKind === 'free'; }
 function restoration() { return { fen: root?.fen || START, moves: current ? pathMoves(current) : [] }; }
+// Store the red-perspective score on the searched node so the trend chart can
+// survive navigation, branching and multiple analysis runs.
+function recordEval(node, score, side) {
+  if (!node || !Number.isFinite(score)) return;
+  node.eval = score * (side === 0 ? 1 : -1);
+  node.evalMate = Math.abs(score) >= MATE_BOUND;
+}
 async function stopSearch() {
   if (!searching) return;
   epoch++;
@@ -2070,6 +2189,7 @@ function renderBoard() {
   const targets = draft || selected === null ? [] : state.legal.filter(m => from(m) === selected).map(to);
   const last = current?.move || null;
   $('board').classList.toggle('editing', !!draft);
+  $('board').classList.toggle('free-analysis', !draft && freeAnalysing());
   for (let s = 0; s < 90; s++) {
     const button = squares[s], p = pieces[s], point = boardPoint(s, flipped);
     button.style.left = `${point.x / 580 * 100}%`;
@@ -2077,7 +2197,7 @@ function renderBoard() {
     button.classList.toggle('selected', draft ? editSource === s : selected === s);
     button.classList.toggle('legal', targets.includes(s));
     button.classList.toggle('last', !draft && !!last && (from(last) === s || to(last) === s));
-    button.setAttribute('aria-disabled', String(busy));
+    button.setAttribute('aria-disabled', String(busy && !freeAnalysing()));
     button.setAttribute('aria-label', `${coord(s)} ${p ? (p > 0 ? '红' : '黑') + pieceName(p) : '空位'}`);
     // Preserve nodes and their centering transform when search status changes.
     if (button.dataset.piece !== String(p)) {
@@ -2103,10 +2223,9 @@ function renderArrow() {
     $('board').append(arrowOverlay);
   }
   const kind = analysis?.kind;
-  // Both-side replies are only revealed for an explicit hint or free analysis.
-  // During engine play keep just the engine's own move so the player's best
-  // reply is never exposed.
-  const showReply = kind === 'hint' || kind === 'free';
+  // Both-side replies are revealed for free analysis only. During engine play
+  // keep just the engine's own move so the player's best reply is never exposed.
+  const showReply = kind === 'free';
   const pv = analysis?.pv?.length ? analysis.pv : analysis?.move ? [analysis.move] : [];
   const visible = !draft && analysis?.rootFen === state.fen && state.legal.includes(pv[0]);
   const arrows = visible ? pvArrows(analysis.rootPieces, pv, flipped).slice(0, showReply ? 2 : 1) : [];
@@ -2135,6 +2254,47 @@ function renderArrow() {
   $('reply-legend').hidden = !showReply;
   $('reply-legend').style.display = showReply ? 'flex' : 'none';
   $('reply-note').textContent = showReply && arrows.length === 1 ? '暂无应着' : '';
+}
+function renderTrend() {
+  const host = $('trend'); if (!host || !root) return;
+  const line = activeLine(), total = line.length, points = [];
+  const collect = (node, ply) => {
+    if (!Number.isFinite(node.eval)) return;
+    points.push({ node, ply, value: Math.max(-TREND_CLAMP, Math.min(TREND_CLAMP, node.eval)), mate: !!node.evalMate });
+  };
+  collect(root, 0);
+  line.forEach((node, index) => collect(node, index + 1));
+  const width = 360, height = 108, left = 30, right = 352, top = 12, bottom = 84;
+  const middle = (top + bottom) / 2;
+  const x = ply => total ? left + (ply / total) * (right - left) : (left + right) / 2;
+  const y = value => middle - (value / TREND_CLAMP) * ((bottom - top) / 2);
+  const coords = points.map(point => [x(point.ply), y(point.value)]);
+  const linePath = coords.length > 1
+    ? coords.map(([px, py], index) => `${index ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join(' ') : '';
+  const areaPath = coords.length > 1
+    ? `M${coords[0][0].toFixed(1)},${middle} L${coords.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(' L')} L${coords.at(-1)[0].toFixed(1)},${middle} Z` : '';
+  const dots = points.map((point, index) => {
+    const [px, py] = coords[index], here = point.node === current;
+    const label = point.mate ? (point.value > 0 ? '红方绝杀' : '黑方绝杀') : `${point.value > 0 ? '+' : ''}${Math.round(point.value)} cp`;
+    return `<circle class="trend-dot${here ? ' current' : ''}${point.mate ? ' mate' : ''}" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${here ? 3 : 1.8}"><title>第 ${point.ply} 手 · ${label}</title></circle>`;
+  }).join('');
+  const currentX = x(current?.depth || 0).toFixed(1);
+  const marker = current ? `<line class="trend-now" x1="${currentX}" y1="${top}" x2="${currentX}" y2="${bottom}"/>` : '';
+  const empty = points.length ? '' : `<text class="trend-empty" x="${width / 2}" y="${middle + 3}" text-anchor="middle">等待引擎评价</text>`;
+  const xLabels = total
+    ? `<text class="trend-axis" x="${left}" y="${height - 5}" text-anchor="start">0</text><text class="trend-axis" x="${right}" y="${height - 5}" text-anchor="end">${total}</text>`
+    : `<text class="trend-axis" x="${(left + right) / 2}" y="${height - 5}" text-anchor="middle">0</text>`;
+  host.innerHTML = `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true">
+<defs><clipPath id="trend-positive"><rect x="${left}" y="${top}" width="${right - left}" height="${middle - top}"/></clipPath><clipPath id="trend-negative"><rect x="${left}" y="${middle}" width="${right - left}" height="${bottom - middle}"/></clipPath></defs>
+<line class="trend-edge" x1="${left}" y1="${top}" x2="${right}" y2="${top}"/><line class="trend-edge" x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}"/>
+<line class="trend-zero" x1="${left}" y1="${middle}" x2="${right}" y2="${middle}"/>
+${areaPath ? `<path class="trend-area positive" d="${areaPath}" clip-path="url(#trend-positive)"/><path class="trend-area negative" d="${areaPath}" clip-path="url(#trend-negative)"/>` : ''}
+${linePath ? `<path class="trend-line" d="${linePath}"/>` : ''}
+${marker}${dots}${empty}
+<text class="trend-axis red" x="0" y="${top + 3}">红优</text><text class="trend-axis" x="0" y="${bottom + 3}">黑优</text><text class="trend-axis" x="0" y="${middle + 3}">0</text>${xLabels}
+</svg>`;
+  host.setAttribute('aria-label', `评价走势，红方视角；${points.length ? `已评价 ${points.length} 个局面` : '尚无引擎评价'}${current ? `，当前第 ${current.depth} 手` : ''}`);
+  $('trend-note').textContent = points.length ? `红方视角 · ${points.length}/${total + 1} 个局面` : '红方视角 · cp';
 }
 function renderAnalysis() {
   renderArrow();
@@ -2169,6 +2329,7 @@ function renderAnalysis() {
     $('score').style.color = ''; $('score').title = '红方视角；整数 centipawn (cp)';
     $('eval-fill').style.width = '0'; $('eval-fill').style.left = '50%'; $('eval-fill').style.background = 'var(--cinnabar)'; $('pv').textContent = '—';
   }
+  renderTrend();
 }
 function renderHistory() {
   if (!root) return;
@@ -2242,6 +2403,7 @@ function render() {
   const reviewing = !!current && lineEnd(current) !== current;
   const engineToMove = !!state && !!state.legal.length && engineSide(state.side);
   $('board-caption').textContent = warning || (draft ? '编辑棋盘'
+    : freeAnalysing() ? (selected !== null ? '自由分析中 · 落子后立即重新分析' : '自由分析中 · 点击棋子直接走子')
     : reviewing ? (engineToMove ? `回看第 ${current.depth} 步 · 点击棋盘让引擎走子` : `回看第 ${current.depth} 步 · 落子建立分支`)
     : selected !== null ? '选择落点' : '点击棋子，选择落点');
   $('board-caption').classList.toggle('warning', !!warning);
@@ -2258,7 +2420,7 @@ function render() {
       : state.side === c ? (searching ? (searchKind === 'free' ? '分析中' : '思考中') : '正在走棋') : '等待落子';
     $(`${where}-status`).classList.toggle('turn', !ended && state.side === c);
   }
-  for (const id of ['hint', 'analyse']) $(id).disabled = busy || !!draft || ended;
+  $('analyse').disabled = busy || !!draft || ended;
   $('stop').disabled = !searching;
   $('apply-best').disabled = busy || !!draft || !analysis?.move || analysis.side !== state.side || !state.legal.includes(analysis.move);
   for (const id of ['new-game', 'import', 'copy', 'edit', 'nnue-file', 'clear-nnue']) $(id).disabled = busy || !!draft || !ready || (id === 'clear-nnue' && !netBytes);
@@ -2282,16 +2444,18 @@ function limits(free = false) {
 }
 async function search(kind) {
   const params = limits(kind === 'free');
-  const token = ++epoch, side = state.side, rootFen = state.fen, rootPieces = [...state.pieces];
+  const token = ++epoch, side = state.side, rootFen = state.fen, rootPieces = [...state.pieces], node = current;
   searching = true; busy = true; searchKind = kind; message = ''; analysis = null; render();
   try {
     const result = await call('think', params, progress => {
       if (token !== epoch) return;
+      recordEval(node, progress.score, side);
       analysis = { ...progress, side, rootFen, rootPieces, kind }; renderAnalysis();
     });
     if (token !== epoch) return null;
+    recordEval(node, result.score, side);
     analysis = { ...result, side, rootFen, rootPieces, kind };
-    message = kind === 'hint' && result.move ? `建议 ${moveNotation(rootPieces, result.move)}` : kind === 'free' ? '分析完成' : '';
+    message = kind === 'free' ? '分析完成' : '';
     return result;
   } finally {
     if (token === epoch) { busy = false; searching = false; render(); }
@@ -2326,8 +2490,23 @@ async function engineTurn() {
     }
   } finally { engineLoop = false; }
 }
+// A move made during free analysis immediately abandons the running search,
+// plays the move, then restarts free analysis on the resulting position.
+async function playWhileAnalysing(move) {
+  if (!freeAnalysing()) return;
+  selected = null;
+  try {
+    await stopSearch();
+    busy = true; message = ''; render();
+    await play(move);
+    if (state.legal.length) await search('free');
+  } catch (e) { fail(e); }
+  finally { if (!searching && !restoring) { busy = false; render(); } }
+}
 $('board').onclick = async event => {
-  const square = event.target.closest('[data-square]'); if (!square || busy) return;
+  const square = event.target.closest('[data-square]');
+  const free = freeAnalysing();
+  if (!square || (busy && !free)) return;
   const s = Number(square.dataset.square);
   if (draft) {
     if (editTool === 'move') {
@@ -2337,7 +2516,7 @@ $('board').onclick = async event => {
     renderBoard(); return;
   }
   if (!state.legal.length) return;
-  if (!humanSide(state.side)) {
+  if (!free && !humanSide(state.side)) {
     // A click on the board while reviewing activates the viewed position:
     // if the engine is to move, it starts thinking from this node.
     if (!searching) engineTurn().catch(fail);
@@ -2346,7 +2525,9 @@ $('board').onclick = async event => {
   const move = state.legal.find(m => from(m) === selected && to(m) === s);
   if (!move) {
     const own = !!state.pieces[s] && (state.pieces[s] > 0 ? 0 : 1) === state.side;
-    if (!own && selected !== null) {
+    // The worker is busy inside the free search, so it cannot answer a probe.
+    // Skip the self-check warning and just update the local selection.
+    if (!free && !own && selected !== null) {
       try {
         if (await call('probe', { move: (selected << 7) | s }) === 2) {
           showWarning(state.check ? '己方正被将军，必须应将，请变着' : '不能送将，请变着');
@@ -2356,6 +2537,11 @@ $('board').onclick = async event => {
     }
     selected = own ? (selected === s ? null : s) : null;
     clearWarning(); render();
+    return;
+  }
+  if (free) {
+    clearWarning();
+    await playWhileAnalysing(move);
     return;
   }
   clearWarning(); busy = true; render();
@@ -2423,7 +2609,6 @@ for (const id of ['red-side', 'black-side']) $(id).onchange = () => { sideChange
 $('new-game').onclick = () => root?.children.length ? $('confirm').showModal() : newGame();
 $('cancel').onclick = () => $('confirm').close();
 $('confirm-new').onclick = () => { $('confirm').close(); newGame(); };
-$('hint').onclick = async () => { if (busy || draft) return; try { await search('hint'); } catch (e) { fail(e); } };
 $('analyse').onclick = async () => {
   if (busy || draft) return;
   try { await search('free'); } catch (e) { fail(e); }
@@ -2557,6 +2742,7 @@ try {
 <div class="player"><span class="piece-badge black">将</span><div class="player-copy"><strong id="top-player">Focalors-Xiangqi</strong><small id="top-detail">执黑 · 引擎棋手</small></div><span class="player-status" id="top-status">等待落子</span></div>
 <div class="board-wrap"><div id="board" role="group" aria-label="中国象棋棋盘"></div></div>
 <div class="player bottom"><span class="piece-badge red">帅</span><div class="player-copy"><strong id="bottom-player">你</strong><small id="bottom-detail">执红 · 人类棋手</small></div><span class="player-status" id="bottom-status">轮到你了</span></div>
+<div class="board-analysis" role="group" aria-label="引擎分析操作"><button id="analyse" class="secondary" disabled>自由分析</button><button id="stop" class="secondary" disabled>停止搜索</button><button id="apply-best" class="secondary" disabled>执行建议</button></div>
 <div class="board-toolbar"><span id="board-caption" role="status" aria-live="polite">点击棋子，选择落点</span><div class="board-actions"><button id="undo" class="ghost" title="撤回一轮走子" disabled>悔棋</button><button id="flip" class="ghost" title="翻转棋盘">翻转</button><button id="edit" class="ghost" title="摆棋 / 编辑局面" disabled>摆棋</button></div></div>
 
 </section>
@@ -2600,12 +2786,12 @@ try {
 <p id="status" role="status" aria-live="polite">正在加载象棋引擎…</p>
 <div class="evaluation"><span class="eval-side red">红</span><strong id="score" title="红方视角；整数 centipawn (cp)">—</strong><span class="eval-side black">黑</span></div>
 <div class="eval-track"><div id="eval-fill"></div></div>
+<div class="trend-block"><div class="trend-head"><span>评价走势</span><span id="trend-note">红方视角 · cp</span></div><div id="trend" class="trend" role="img" aria-label="评价走势"></div></div>
 <div class="metrics"><div><small>搜索深度</small><span id="depth">—</span></div><div><small>搜索节点</small><span id="nodes">—</span></div><div><small>用时</small><span id="elapsed">—</span></div></div>
 <div class="pv-head"><span>主变</span></div>
 <p id="pv" class="pv" aria-label="主变">—</p>
 <div id="arrow-legend" class="arrow-legend" hidden><span><i class="first-key">1</i> <span id="first-arrow-label">建议 · 实线</span></span><span id="reply-legend"><i class="reply-key">2</i> 应着 · 虚线</span></div>
 <p id="reply-note" class="settings-note"></p>
-<div class="search-actions"><button id="hint" class="secondary" disabled>走子建议</button><button id="analyse" class="secondary" disabled>自由分析</button><button id="stop" class="secondary" disabled>停止搜索</button><button id="apply-best" class="secondary" disabled>执行建议</button></div>
 </section>
 <section class="panel history-panel">
 <div class="panel-heading"><h2>棋谱 <span id="move-count">0</span></h2><button id="export" class="ghost" title="下载当前棋谱">导出 ↗</button></div>
